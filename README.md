@@ -1,4 +1,4 @@
-# 🎵 SyncWave (Musicyfy)
+# SyncWave
 
 A real-time collaborative music streaming platform that enables groups of users to create virtual rooms, queue YouTube music together, and enjoy synchronized playback with live chat.
 
