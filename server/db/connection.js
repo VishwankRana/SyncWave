@@ -1,12 +1,21 @@
-import mongoose from 'mongoose'
-import { config } from '../config.js'
+import mongoose from "mongoose";
 
-export async function connectDB() {
+const connectDB = async () => {
   try {
-    await mongoose.connect(`${config.mongoUrl}/${config.mongoDbName}`)
-    console.log('MongoDB connected (Mongoose)')
+    const mongoUri = process.env.MONGODB_URI;
+    console.log("Mongo URL being used:", mongoUri);
+
+    if (!mongoUri) {
+      throw new Error("MONGODB_URI is missing");
+    }
+
+    await mongoose.connect(mongoUri);
+
+    console.log("MongoDB connected");
   } catch (error) {
-    console.error('MongoDB connection error:', error)
-    process.exit(1)
-  } 
-}
+    console.error("MongoDB connection error:", error);
+    process.exit(1);
+  }
+};
+
+export default connectDB;
