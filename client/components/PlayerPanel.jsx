@@ -18,8 +18,7 @@ function PlayerPanel({
   isPlaying,
   isHost,
   queue,
-  // onCreateRoom,
-  // onCopyInvite,
+  onCopyInvite,
   onPlaybackToggle,
   messages,
   chatDraft,
@@ -72,14 +71,7 @@ function PlayerPanel({
             {activeRoom?.vibe ?? "Keep the room in sync with the player below."}
           </p>
 
-          {/* <div className="hero-actions">
-            <button
-              className="primary-button"
-              type="button"
-              onClick={onCreateRoom}
-            >
-              Create Room
-            </button>
+          <div className="hero-actions">
             <button
               className="secondary-button"
               type="button"
@@ -87,7 +79,7 @@ function PlayerPanel({
             >
               Invite Friends
             </button>
-          </div> */}
+          </div>
 
           <div className="hero-player">
             <div className="album-glow" />
@@ -97,7 +89,6 @@ function PlayerPanel({
                 src={currentTrackEmbedUrl}
                 title={currentTrack?.title ?? "Music player"}
                 allow="autoplay; encrypted-media; fullscreen"
-                allowFullScreen
                 ref={playerIframeRef}
                 onLoad={onPlayerLoad}
               />

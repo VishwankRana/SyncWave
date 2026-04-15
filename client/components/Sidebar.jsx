@@ -4,26 +4,30 @@ function Sidebar({
   onSelectRoom,
   connectionStatus,
   user,
-  inviteDraft,
-  onInviteDraftChange,
-  onJoinInvite,
   roomNameDraft,
   onRoomNameDraftChange,
   onCreateRoom,
-  onCopyInvite,
   onLogout,
   notice,
   members,
   membersCount,
   hostUserId,
   onDeleteRoom,
+  onCopyInvite,
+  publicRooms,
+  isOpen,
 }) {
   const myRooms = rooms.filter(
     (room) => room.hostUserId && room.hostUserId === user?.userId,
   );
 
+  // Filter public rooms to exclude ones the user owns
+  const browseRooms = (publicRooms ?? []).filter(
+    (pr) => !myRooms.some((mr) => mr.id === pr.roomId),
+  );
+
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar${isOpen ? " sidebar--open" : ""}`}>
       <div className="brand">
         <div className="brand-mark">M</div>
         <div>
@@ -115,6 +119,35 @@ function Sidebar({
         )}
       </div>
 
+      {browseRooms.length > 0 && (
+        <div className="sidebar-section">
+          <div className="section-heading">
+            <span>Browse Rooms</span>
+            <span>{browseRooms.length}</span>
+          </div>
+          <div className="room-list">
+            {browseRooms.map((room) => (
+              <div
+                key={room.roomId}
+                className={`room-chip room-chip--browse ${room.roomId === activeRoomId ? "room-chip--active" : ""}`}
+              >
+                <button
+                  className="room-chip__body"
+                  onClick={() => onSelectRoom(room.roomId)}
+                  type="button"
+                >
+                  <span className="room-chip__title">{room.roomName}</span>
+                  <span className="room-chip__meta">
+                    by {room.createdByName ?? "Unknown"} · {room.listeners}{" "}
+                    listening
+                  </span>
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="sidebar-card">
         <p className="eyebrow">Session Setup</p>
         <div className="setup-form">
@@ -142,6 +175,7 @@ function Sidebar({
             >
               Create Room
             </button>
+
             <button
               className="secondary-button"
               type="button"
@@ -150,23 +184,6 @@ function Sidebar({
               Copy Invite
             </button>
 
-            <label className="field">
-              <span>Join room</span>
-              <input
-                type="text"
-                value={inviteDraft}
-                onChange={(event) => onInviteDraftChange(event.target.value)}
-                placeholder="Invite link or room code"
-              />
-            </label>
-
-            <button
-              className="primary-button"
-              type="button"
-              onClick={onJoinInvite}
-            >
-              Join Room
-            </button>
             <button
               className="secondary-button"
               type="button"

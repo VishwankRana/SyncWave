@@ -65,9 +65,17 @@ function getCurrentUser(token) {
   });
 }
 
+function googleSignIn(credential) {
+  return requestAuth("/google", {
+    method: "POST",
+    body: JSON.stringify({ credential }),
+  });
+}
+
 export {
   getCurrentUser,
   getStoredToken,
+  googleSignIn,
   login,
   register,
   storeToken,

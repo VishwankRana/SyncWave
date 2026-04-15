@@ -16,7 +16,15 @@
         },
         password: {
         type: String,
-        required: true,
+        required: false, // Optional for OAuth users
+        },
+        googleId: {
+        type: String,
+        default: null,
+        },
+        avatar: {
+        type: String,
+        default: null,
         },
     },
     {
@@ -24,4 +32,4 @@
     }
     )
 
-    export const User = mongoose.model('User', userSchema)
+    export const User = mongoose.model('User', userSchema)

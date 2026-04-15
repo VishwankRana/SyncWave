@@ -4,39 +4,27 @@ import { SOCKET_EVENTS } from "../shared/contracts.js";
 import AuthScreen from "./components/AuthScreen.jsx";
 import RoomWorkspace from "./components/RoomWorkspace.jsx";
 import Sidebar from "./components/Sidebar.jsx";
-import ReactionBar, { useReactions } from "./components/ReactionBar.jsx";
 import {
   SOCKET_URL,
   createRoomProfile,
+  generateInviteCode,
   getTrackEmbedUrl,
   initialRoomId,
   joinMessage,
   loadScriptOnce,
   makeRoomId,
+  pendingInviteCode,
+  resolveInviteCode,
 } from "./lib/musicyfy.js";
 import {
   getCurrentUser,
   getStoredToken,
+  googleSignIn,
   login,
   register,
   storeToken,
 } from "./lib/auth.js";
 import "./App.css";
-
-function parseRoomTarget(input) {
-  const value = input.trim();
-
-  if (!value) {
-    return "";
-  }
-
-  try {
-    const parsed = new URL(value);
-    return parsed.searchParams.get("room")?.trim() ?? value;
-  } catch {
-    return value;
-  }
-}
 
 function getMemberCount(members) {
   if (!members) {
@@ -67,10 +55,11 @@ function App() {
   const [activeRoomId, setActiveRoomId] = useState(initialRoomId);
   const [token, setToken] = useState(() => getStoredToken());
   const [authMode, setAuthMode] = useState("login");
-  const [authStatus, setAuthStatus] = useState(() => (getStoredToken() ? "checking" : "guest"));
+  const [authStatus, setAuthStatus] = useState(() =>
+    getStoredToken() ? "checking" : "guest",
+  );
   const [authNotice, setAuthNotice] = useState("");
   const [user, setUser] = useState(null);
-  const [inviteDraft, setInviteDraft] = useState(() => initialRoomId ?? "");
   const [roomNameDraft, setRoomNameDraft] = useState("Studio Room");
   const [roomState, setRoomState] = useState(null);
   const [chatDraft, setChatDraft] = useState("");
@@ -79,6 +68,10 @@ function App() {
   const [notice, setNotice] = useState("");
   const [playerStatus, setPlayerStatus] = useState("idle");
   const [skipVotes, setSkipVotes] = useState({ trackId: null, voters: [] });
+  const [toast, setToast] = useState("");
+  const [pendingRoomId, setPendingRoomId] = useState(null);
+  const [publicRooms, setPublicRooms] = useState([]);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const socketRef = useRef(null);
   const playerIframeRef = useRef(null);
@@ -87,13 +80,37 @@ function App() {
   const clockOffsetRef = useRef(0);
   const trackProgressRef = useRef({ currentTimeMs: 0, durationMs: 0 });
 
-  const [trackProgress, setTrackProgress] = useState({ currentTimeMs: 0, durationMs: 0 });
+  const [trackProgress, setTrackProgress] = useState({
+    currentTimeMs: 0,
+    durationMs: 0,
+  });
 
-  const { bursts, handleSendReaction } = useReactions(socketRef, activeRoomId);
 
   useEffect(() => {
     displayNameRef.current = user?.name ?? "";
   }, [user]);
+
+  // Fetch public rooms for discovery
+  useEffect(() => {
+    if (authStatus !== "authenticated") return;
+
+    async function fetchPublicRooms() {
+      try {
+        const res = await fetch("/api/rooms/public");
+        const data = await res.json();
+        if (data.ok && data.rooms) {
+          setPublicRooms(data.rooms);
+        }
+      } catch {
+        // silently fail
+      }
+    }
+
+    fetchPublicRooms();
+    // Refresh every 30 seconds
+    const interval = setInterval(fetchPublicRooms, 30000);
+    return () => clearInterval(interval);
+  }, [authStatus]);
 
   useEffect(() => {
     if (!token) {
@@ -145,7 +162,6 @@ function App() {
     setRooms([]);
     setRoomState(null);
     setActiveRoomId(initialRoomId);
-    setInviteDraft(initialRoomId ?? "");
     setConnectionStatus("offline");
     setNotice("");
     setPlayerStatus("idle");
@@ -172,12 +188,31 @@ function App() {
     }
   }, []);
 
+  const handleGoogleAuth = useCallback(async (credential) => {
+    setAuthNotice("");
+    setAuthStatus("submitting");
+
+    try {
+      const result = await googleSignIn(credential);
+      storeToken(result.token);
+      setToken(result.token);
+      setUser(result.user);
+      setAuthStatus("authenticated");
+    } catch (error) {
+      setAuthStatus("guest");
+      setAuthNotice(error.message || "Google authentication failed");
+    }
+  }, []);
+
   const activeRoom = useMemo(
     () => rooms.find((room) => room.id === activeRoomId) ?? rooms[0] ?? null,
     [activeRoomId, rooms],
   );
 
-  const memberList = useMemo(() => getMemberList(roomState?.members), [roomState?.members]);
+  const memberList = useMemo(
+    () => getMemberList(roomState?.members),
+    [roomState?.members],
+  );
   const membersCount = getMemberCount(roomState?.members);
   const queue = roomState?.queue ?? [];
   const messages = roomState?.chat ?? [];
@@ -244,20 +279,16 @@ function App() {
       }
 
       setConnectionStatus(socket.connected ? "connected" : "connecting");
-      socket.emit(
-        SOCKET_EVENTS.ROOM_JOIN,
-        { roomId },
-        (ack) => {
-          if (!ack?.ok || !ack.state) {
-            setNotice(ack?.error ?? "Room could not be joined");
-            return;
-          }
+      socket.emit(SOCKET_EVENTS.ROOM_JOIN, { roomId }, (ack) => {
+        if (!ack?.ok || !ack.state) {
+          setNotice(ack?.error ?? "Room could not be joined");
+          return;
+        }
 
-          setRoomState(ack.state);
-          syncRoomProfileFromState(ack.state);
-          setNotice(`Joined ${ack.state.roomName ?? roomId}`);
-        },
-      );
+        setRoomState(ack.state);
+        syncRoomProfileFromState(ack.state);
+        setNotice(`Joined ${ack.state.roomName ?? roomId}`);
+      });
     },
     [syncRoomProfileFromState],
   );
@@ -277,7 +308,8 @@ function App() {
       const roundTripMs = clientReceivedAtMs - clientSentAtMs;
       const oneWayMs = roundTripMs / 2;
       // offset = how much to add to local time to get server time
-      clockOffsetRef.current = ack.serverReceivedAtMs - clientSentAtMs - oneWayMs;
+      clockOffsetRef.current =
+        ack.serverReceivedAtMs - clientSentAtMs - oneWayMs;
     });
   }, []);
 
@@ -336,43 +368,47 @@ function App() {
   );
 
   // Calculate where the player should be based on server time
-  const seekToSyncPosition = useCallback(
-    (nowPlaying) => {
-      if (!nowPlaying?.track || nowPlaying.status !== "playing" || !nowPlaying.startedAtMs) {
-        return;
-      }
+  const seekToSyncPosition = useCallback((nowPlaying) => {
+    if (
+      !nowPlaying?.track ||
+      nowPlaying.status !== "playing" ||
+      !nowPlaying.startedAtMs
+    ) {
+      return;
+    }
 
-      const iframe = playerIframeRef.current;
-      if (!iframe) {
-        return;
-      }
+    const iframe = playerIframeRef.current;
+    if (!iframe) {
+      return;
+    }
 
-      // Convert local time to server time, then calculate position
-      const serverNowMs = Date.now() + clockOffsetRef.current;
-      const elapsedMs = serverNowMs - nowPlaying.startedAtMs;
-      const seekSeconds = Math.max(0, (nowPlaying.positionMs + elapsedMs) / 1000);
+    // Convert local time to server time, then calculate position
+    const serverNowMs = Date.now() + clockOffsetRef.current;
+    const elapsedMs = serverNowMs - nowPlaying.startedAtMs;
+    const seekSeconds = Math.max(0, (nowPlaying.positionMs + elapsedMs) / 1000);
 
-      if (nowPlaying.track.provider === "youtube" && seekSeconds > 1) {
-        iframe.contentWindow?.postMessage(
-          JSON.stringify({
-            event: "command",
-            func: "seekTo",
-            args: [seekSeconds, true],
-          }),
-          "*",
-        );
-      }
+    if (nowPlaying.track.provider === "youtube" && seekSeconds > 1) {
+      iframe.contentWindow?.postMessage(
+        JSON.stringify({
+          event: "command",
+          func: "seekTo",
+          args: [seekSeconds, true],
+        }),
+        "*",
+      );
+    }
 
-      if (nowPlaying.track.provider === "soundcloud" && soundCloudWidgetRef.current) {
-        try {
-          soundCloudWidgetRef.current.seekTo(seekSeconds * 1000);
-        } catch {
-          // widget may not be ready
-        }
+    if (
+      nowPlaying.track.provider === "soundcloud" &&
+      soundCloudWidgetRef.current
+    ) {
+      try {
+        soundCloudWidgetRef.current.seekTo(seekSeconds * 1000);
+      } catch {
+        // widget may not be ready
       }
-    },
-    [],
-  );
+    }
+  }, []);
 
   useEffect(() => {
     if (!token || authStatus !== "authenticated") {
@@ -439,7 +475,10 @@ function App() {
       setConnectionStatus("connected");
 
       // Sync playback position when receiving room state
-      if (state?.nowPlaying?.status === "playing" && state?.nowPlaying?.startedAtMs) {
+      if (
+        state?.nowPlaying?.status === "playing" &&
+        state?.nowPlaying?.startedAtMs
+      ) {
         setTimeout(() => seekToSyncPosition(state.nowPlaying), 1500);
       }
     };
@@ -493,7 +532,11 @@ function App() {
     socket.on("disconnect", handleDisconnect);
     socket.on("connect_error", (error) => {
       setConnectionStatus("offline");
-      setNotice(error.message === "Authentication error" ? "Please sign in again" : "Backend connection failed");
+      setNotice(
+        error.message === "Authentication error"
+          ? "Please sign in again"
+          : "Backend connection failed",
+      );
 
       if (error.message === "Authentication error") {
         handleLogout();
@@ -513,7 +556,14 @@ function App() {
       socket.removeAllListeners();
       socket.disconnect();
     };
-  }, [authStatus, handleLogout, requestClockSync, syncRoomProfileFromState, token]);
+  }, [
+    authStatus,
+    handleLogout,
+    requestClockSync,
+    seekToSyncPosition,
+    syncRoomProfileFromState,
+    token,
+  ]);
 
   useEffect(() => {
     const socket = socketRef.current;
@@ -613,7 +663,8 @@ function App() {
       }
 
       try {
-        const data = typeof event.data === "string" ? JSON.parse(event.data) : event.data;
+        const data =
+          typeof event.data === "string" ? JSON.parse(event.data) : event.data;
 
         // YouTube iframe API sends info with playerState: 0 when video ends
         if (data?.event === "onStateChange" && data?.info === 0) {
@@ -633,7 +684,11 @@ function App() {
     const widget = soundCloudWidgetRef.current;
     let scBound = false;
 
-    if (currentTrack?.provider === "soundcloud" && widget && window.SC?.Widget?.Events) {
+    if (
+      currentTrack?.provider === "soundcloud" &&
+      widget &&
+      window.SC?.Widget?.Events
+    ) {
       try {
         widget.bind(window.SC.Widget.Events.FINISH, () => {
           socket.emit(SOCKET_EVENTS.PLAYBACK_COMMAND, {
@@ -699,7 +754,8 @@ function App() {
       if (currentTrack?.provider !== "youtube") return;
 
       try {
-        const data = typeof event.data === "string" ? JSON.parse(event.data) : event.data;
+        const data =
+          typeof event.data === "string" ? JSON.parse(event.data) : event.data;
 
         if (data?.event === "infoDelivery" && data?.info) {
           const info = data.info;
@@ -772,7 +828,81 @@ function App() {
       if (scInterval) clearInterval(scInterval);
       if (rafId) cancelAnimationFrame(rafId);
     };
-  }, [currentTrack, roomState?.nowPlaying?.startedAtMs, roomState?.nowPlaying?.status]);
+  }, [
+    currentTrack,
+    roomState?.nowPlaying?.startedAtMs,
+    roomState?.nowPlaying?.status,
+    roomState?.nowPlaying?.positionMs,
+  ]);
+
+  function showToast(message) {
+    setToast(message);
+    setTimeout(() => setToast(""), 2500);
+  }
+
+  async function handleCopyInvite() {
+    if (!activeRoomId) {
+      setNotice("Join or create a room first");
+      return;
+    }
+
+    try {
+      const { inviteLink } = await generateInviteCode(token, activeRoomId);
+
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(inviteLink);
+        showToast("✓ Invite link copied! Expires in 1 hour.");
+      } else {
+        // Fallback for older browsers / insecure contexts
+        const textarea = document.createElement("textarea");
+        textarea.value = inviteLink;
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textarea);
+        showToast("✓ Invite link copied! Expires in 1 hour.");
+      }
+    } catch (error) {
+      showToast(error.message || "Failed to generate invite");
+    }
+  }
+
+  // ============ INVITE CODE RESOLUTION ============
+  // Resolve /join/:code URL on mount → store the roomId for auto-join
+  useEffect(() => {
+    if (!pendingInviteCode) return;
+
+    let cancelled = false;
+
+    async function resolve() {
+      try {
+        const { roomId } = await resolveInviteCode(pendingInviteCode);
+        if (cancelled) return;
+
+        setPendingRoomId(roomId);
+        // Clean the URL without a page reload
+        window.history.replaceState(null, "", "/");
+        showToast("Invite link accepted! Joining room...");
+      } catch (error) {
+        if (cancelled) return;
+        window.history.replaceState(null, "", "/");
+        showToast(error.message || "Invalid or expired invite link");
+      }
+    }
+
+    void resolve();
+    return () => { cancelled = true; };
+  }, []); // runs once on mount
+
+  // Auto-join the pending invite room after authentication completes
+  useEffect(() => {
+    if (!pendingRoomId || authStatus !== "authenticated") return;
+
+    setActiveRoomId(pendingRoomId);
+    setPendingRoomId(null);
+  }, [pendingRoomId, authStatus]);
 
   function handleCreateRoom() {
     const roomName = roomNameDraft.trim() || "New Room";
@@ -808,26 +938,21 @@ function App() {
     );
   }
 
-  const ensureRoomProfile = useCallback((roomId, roomName, host = displayNameRef.current, hostId = null) => {
-    setRooms((existing) => {
-      if (existing.some((room) => room.id === roomId)) {
-        return existing;
-      }
+  const ensureRoomProfile = useCallback(
+    (roomId, roomName, host = displayNameRef.current, hostId = null) => {
+      setRooms((existing) => {
+        if (existing.some((room) => room.id === roomId)) {
+          return existing;
+        }
 
-      return [...existing, createRoomProfile(roomId, roomName, host, 1, hostId)];
-    });
-  }, []);
-
-  function handleCopyInvite() {
-    if (!activeRoomId) {
-      setNotice("Create or join a room first");
-      return;
-    }
-
-    const invite = `${window.location.origin}?room=${activeRoomId}`;
-    window.navigator.clipboard?.writeText(invite);
-    setNotice(`Invite link copied for ${activeRoomId}`);
-  }
+        return [
+          ...existing,
+          createRoomProfile(roomId, roomName, host, 1, hostId),
+        ];
+      });
+    },
+    [],
+  );
 
   function handleDeleteRoom(roomId) {
     const socket = socketRef.current;
@@ -837,39 +962,21 @@ function App() {
       return;
     }
 
-    socket.emit(
-      SOCKET_EVENTS.ROOM_DELETE,
-      { roomId },
-      (ack) => {
-        if (!ack?.ok) {
-          setNotice(ack?.error ?? "Could not delete room");
-          return;
-        }
+    socket.emit(SOCKET_EVENTS.ROOM_DELETE, { roomId }, (ack) => {
+      if (!ack?.ok) {
+        setNotice(ack?.error ?? "Could not delete room");
+        return;
+      }
 
-        setRooms((existing) => existing.filter((room) => room.id !== roomId));
+      setRooms((existing) => existing.filter((room) => room.id !== roomId));
 
-        if (activeRoomId === roomId) {
-          setActiveRoomId(null);
-          setRoomState(null);
-        }
+      if (activeRoomId === roomId) {
+        setActiveRoomId(null);
+        setRoomState(null);
+      }
 
-        setNotice("Room deleted");
-      },
-    );
-  }
-
-  function handleJoinInvite() {
-    const roomId = parseRoomTarget(inviteDraft);
-
-    if (!roomId) {
-      setNotice("Paste an invite link or room code");
-      return;
-    }
-
-    setActiveRoomId(roomId);
-    if (typeof window !== "undefined") {
-      window.history.pushState({}, "", `/app?room=${encodeURIComponent(roomId)}`);
-    }
+      setNotice("Room deleted");
+    });
   }
 
   function handleSendMessage(event) {
@@ -1123,6 +1230,7 @@ function App() {
         mode={authMode}
         onModeChange={setAuthMode}
         onSubmit={handleAuth}
+        onGoogleAuth={handleGoogleAuth}
         isSubmitting={authStatus === "submitting"}
         notice={authNotice}
       />
@@ -1131,25 +1239,43 @@ function App() {
 
   return (
     <div className="app-shell">
+      <button
+        className="mobile-menu-toggle"
+        type="button"
+        onClick={() => setSidebarOpen((prev) => !prev)}
+        aria-label="Toggle menu"
+      >
+        {sidebarOpen ? "✕" : "☰"}
+      </button>
+
+      {sidebarOpen && (
+        <div
+          className="sidebar-overlay"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
       <Sidebar
         rooms={rooms}
         activeRoomId={activeRoomId}
-        onSelectRoom={setActiveRoomId}
+        onSelectRoom={(roomId) => {
+          setActiveRoomId(roomId);
+          setSidebarOpen(false);
+        }}
         connectionStatus={connectionStatus}
         user={user}
-        inviteDraft={inviteDraft}
-        onInviteDraftChange={setInviteDraft}
-        onJoinInvite={handleJoinInvite}
         roomNameDraft={roomNameDraft}
         onRoomNameDraftChange={setRoomNameDraft}
         onCreateRoom={handleCreateRoom}
-        onCopyInvite={handleCopyInvite}
         onLogout={handleLogout}
         notice={notice}
         members={memberList}
         membersCount={membersCount}
         hostUserId={hostUserId}
         onDeleteRoom={handleDeleteRoom}
+        onCopyInvite={handleCopyInvite}
+        publicRooms={publicRooms}
+        isOpen={sidebarOpen}
       />
 
       <RoomWorkspace
@@ -1165,12 +1291,12 @@ function App() {
         trackUrl={trackUrl}
         onTrackUrlChange={setTrackUrl}
         onAddTrack={handleAddTrack}
+        onCopyInvite={handleCopyInvite}
         onPlayTrack={handlePlayTrack}
         onMoveTrack={handleMoveTrack}
         onRemoveTrack={handleRemoveTrack}
         onPlaybackToggle={handlePlaybackToggle}
         onCreateRoom={handleCreateRoom}
-        onCopyInvite={handleCopyInvite}
         onChatDraftChange={setChatDraft}
         chatDraft={chatDraft}
         onSendMessage={handleSendMessage}
@@ -1217,10 +1343,11 @@ function App() {
         onSeek={handleSeek}
       />
 
-      <ReactionBar
-        onSendReaction={handleSendReaction}
-        bursts={bursts}
-      />
+      {toast && (
+        <div className="copy-toast" key={toast}>
+          {toast}
+        </div>
+      )}
     </div>
   );
 }

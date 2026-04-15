@@ -14,7 +14,7 @@ A real-time collaborative music streaming platform that enables groups of users 
 
 ### **Collaborative Features**
 
-- **Create & Join Rooms**: Create custom music rooms and invite others via room ID
+- **Create & Join Rooms**: Create custom music rooms and join with room codes
 - **Real-Time Presence**: See who's in the room and when they joined
 - **Live Chat**: Send and receive messages within the room
 - **Emoji Reactions**: React to the music with emoji "bursts" in real-time

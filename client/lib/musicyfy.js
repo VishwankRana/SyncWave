@@ -5,6 +5,51 @@ const initialRoomId =
     ? null
     : new URLSearchParams(window.location.search).get("room");
 
+/** Parse /join/:code from the current URL path */
+const pendingInviteCode = (() => {
+  if (typeof window === "undefined") return null;
+  const match = window.location.pathname.match(/^\/join\/([A-Za-z0-9_-]{4,12})$/);
+  return match ? match[1] : null;
+})();
+
+/**
+ * Call the server to generate a short invite code for a room.
+ * Returns { code, inviteLink }
+ */
+async function generateInviteCode(token, roomId) {
+  const res = await fetch("/api/invites/generate", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ roomId }),
+  });
+
+  const data = await res.json().catch(() => ({}));
+
+  if (!res.ok) {
+    throw new Error(data.error || "Failed to generate invite");
+  }
+
+  return data; // { code, inviteLink }
+}
+
+/**
+ * Resolve an invite code to a roomId.
+ * Returns { roomId } or throws on 404/410.
+ */
+async function resolveInviteCode(code) {
+  const res = await fetch(`/api/invites/${encodeURIComponent(code)}`);
+  const data = await res.json().catch(() => ({}));
+
+  if (!res.ok) {
+    throw new Error(data.error || "Invalid invite link");
+  }
+
+  return data; // { roomId }
+}
+
 function makeRoomId(value) {
   const base = value
     .toLowerCase()
@@ -131,9 +176,13 @@ function getTrackEmbedUrl(track) {
 export {
   SOCKET_URL,
   initialRoomId,
+  pendingInviteCode,
+  generateInviteCode,
+  resolveInviteCode,
   makeRoomId,
   createRoomProfile,
   joinMessage,
   loadScriptOnce,
   getTrackEmbedUrl,
 };
+

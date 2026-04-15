@@ -6,4 +6,6 @@ export const config = {
   mongoUrl: process.env.MONGODB_URI ?? 'mongodb://127.0.0.1:27017',
   mongoDbName: process.env.MONGODB_DB ?? 'musicyfy',
   jwtSecret: process.env.JWT_SECRET ?? 'secret123',
+  googleClientId: process.env.GOOGLE_CLIENT_ID ?? '',
+  googleClientSecret: process.env.GOOGLE_CLIENT_SECRET ?? '',
 }

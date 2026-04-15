@@ -6,7 +6,7 @@ function HistoryPanel({ history, onRequeue }) {
           <p className="eyebrow">Listening History</p>
           <h3>Recently Played</h3>
         </div>
-        <span className="history-panel__count">{history.length} tracks</span>
+        <span className="history-panel__count">Last 5 tracks</span>
       </div>
 
       <div className="history-table">
@@ -15,30 +15,36 @@ function HistoryPanel({ history, onRequeue }) {
             No listening history yet — play a track to see it here.
           </div>
         ) : (
-          [...history].reverse().map((entry, index) => (
-            <article key={`${entry.trackId}-${entry.playedAtMs}-${index}`} className="history-row">
-              <div className="history-row__icon">
-                {entry.provider === "youtube" ? "▶" : "☁"}
-              </div>
-              <div className="history-row__track">
-                <strong>{entry.title}</strong>
-                <span>
-                  {entry.provider} · Played by {entry.playedBy} ·{" "}
-                  {formatTimeAgo(entry.playedAtMs)}
-                </span>
-              </div>
-              <div className="history-row__actions">
-                <button
-                  type="button"
-                  className="mini-button"
-                  onClick={() => onRequeue(entry.url)}
-                  title="Add back to queue"
-                >
-                  + Queue
-                </button>
-              </div>
-            </article>
-          ))
+          [...history]
+            .reverse()
+            .slice(0, 5)
+            .map((entry, index) => (
+              <article
+                key={`${entry.trackId}-${entry.playedAtMs}-${index}`}
+                className="history-row"
+              >
+                <div className="history-row__icon">
+                  {entry.provider === "youtube" ? "▶" : "☁"}
+                </div>
+                <div className="history-row__track">
+                  <strong>{entry.title}</strong>
+                  <span>
+                    {entry.provider} · Played by {entry.playedBy} ·{" "}
+                    {formatTimeAgo(entry.playedAtMs)}
+                  </span>
+                </div>
+                <div className="history-row__actions">
+                  <button
+                    type="button"
+                    className="mini-button"
+                    onClick={() => onRequeue(entry.url)}
+                    title="Add back to queue"
+                  >
+                    + Queue
+                  </button>
+                </div>
+              </article>
+            ))
         )}
       </div>
     </section>
