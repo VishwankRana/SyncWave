@@ -9,7 +9,7 @@ import authRouter from "./routes/Auth.js"
 import inviteRouter from "./routes/invites.js"
 import roomsRouter from "./routes/rooms.js"
 import googleAuthRouter from "./routes/googleAuth.js"
-import { connectDB } from "./db/connection.js"
+import connectDB from "./db/connection.js";
 import { Room } from "./models/Room.js"
 import jwt from 'jsonwebtoken'
 
